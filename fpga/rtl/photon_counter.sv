@@ -47,6 +47,7 @@ logic        reg_reset;
 logic signed [15:0] reg_threshold;
 logic [15:0] reg_deadtime;
 logic [31:0] reg_gate_period;
+logic [3:0]  reg_hist_shift;     // histogram bit shift (0-10)
 
 // Status / readback registers
 logic [31:0] pulse_count;
@@ -58,7 +59,6 @@ logic        overflow;
 logic signed [15:0] adc_prev;       // previous ADC sample
 logic        in_deadtime;            // dead time active flag
 logic [15:0] deadtime_cnt;           // dead time counter
-logic [15:0] peak_current;           // peak tracker during pulse
 logic [31:0] gate_counter;           // gate period counter
 logic [31:0] gate_pulse_count;       // pulses in current gate
 
@@ -81,6 +81,7 @@ always_ff @(posedge clk_i) begin
     reg_threshold   <= 16'sd100;     // default threshold
     reg_deadtime    <= 16'd16;       // 128 ns default
     reg_gate_period <= 32'd125_000_000; // 1 second default
+    reg_hist_shift  <= 4'd0;           // bits [5:0] by default
   end else begin
     // auto-clear reset bit
     if (reg_reset)
@@ -95,6 +96,7 @@ always_ff @(posedge clk_i) begin
         20'h04: reg_threshold   <= sys_wdata[15:0];
         20'h08: reg_deadtime    <= sys_wdata[15:0];
         20'h14: reg_gate_period <= sys_wdata;
+        20'h24: reg_hist_shift  <= sys_wdata[3:0];
         default: ;
       endcase
     end
@@ -128,6 +130,7 @@ end else begin
       20'h00018: sys_rdata <= {16'b0, peak_last};
       20'h0001C: sys_rdata <= {30'b0, overflow, reg_enable};
       20'h00020: sys_rdata <= {{16{adc_dat_i[15]}}, adc_dat_i};
+      20'h00024: sys_rdata <= {28'b0, reg_hist_shift};
       default: begin
         if (sys_addr[19:0] >= 20'h100 && sys_addr[19:0] < 20'h200)
           sys_rdata <= hist_mem[sys_addr[7:2]];
@@ -164,24 +167,18 @@ always_ff @(posedge clk_i) begin
   if (~rstn_i || reg_reset) begin
     in_deadtime  <= 1'b0;
     deadtime_cnt <= '0;
-    peak_current <= '0;
+    peak_last    <= '0;
   end else if (reg_enable) begin
     if (pulse_detected) begin
-      // Enter dead time
+      // Enter dead time, immediately latch crossing value
       in_deadtime  <= 1'b1;
       deadtime_cnt <= reg_deadtime;
-      // Start peak tracking with current sample
-      peak_current <= adc_dat_i[15:0];
+      peak_last    <= {2'b0, adc_dat_i[13:0]};  // capture 14-bit ADC, zero-extend
     end else if (in_deadtime) begin
-      // Track peak during dead time
-      if ($unsigned(adc_dat_i[15:0]) > $unsigned(peak_current))
-        peak_current <= adc_dat_i[15:0];
-
-      if (deadtime_cnt == 0) begin
+      if (deadtime_cnt == 0)
         in_deadtime <= 1'b0;
-      end else begin
+      else
         deadtime_cnt <= deadtime_cnt - 1;
-      end
     end
   end
 end
@@ -197,7 +194,6 @@ always_ff @(posedge clk_i) begin
     gate_counter     <= '0;
     gate_pulse_count <= '0;
     overflow         <= 1'b0;
-    peak_last        <= '0;
   end else if (reg_enable) begin
     // Cumulative counter
     if (pulse_detected) begin
@@ -218,10 +214,7 @@ always_ff @(posedge clk_i) begin
       gate_counter <= gate_counter + 1;
     end
 
-    // Latch peak when dead time ends
-    if (in_deadtime && deadtime_cnt == 0) begin
-      peak_last <= peak_current;
-    end
+    // peak_last is now latched in the dead time handler block
   end
 end
 
@@ -236,9 +229,9 @@ always_ff @(posedge clk_i) begin
     hist_wen <= 1'b0;
     hist_bin <= '0;
   end else begin
-    // One-cycle write pulse at end of dead time
-    hist_wen <= in_deadtime && (deadtime_cnt == 0);
-    hist_bin <= peak_current[15:10]; // top 6 bits = 64 bins
+    // Delayed one cycle from pulse_detected so peak_last is stable
+    hist_wen <= pulse_detected;
+    hist_bin <= (peak_last >> reg_hist_shift) & 6'h3F; // bin the crossing value
   end
 end
 

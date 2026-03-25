@@ -32,7 +32,8 @@ REG_GATE_PERIOD = 0x14
 REG_PEAK_LAST   = 0x18
 REG_STATUS      = 0x1C
 REG_ADC_RAW     = 0x20
-REG_HIST_BASE   = 0x100  # 256 x 4 bytes
+REG_HIST_SHIFT  = 0x24
+REG_HIST_BASE   = 0x100  # 64 x 4 bytes
 
 
 class FPGARegs:
@@ -146,13 +147,20 @@ class PhotonServer:
                     bins.append(str(val))
                 return " ".join(bins)
 
+            elif parts[0] == "SET_HIST_SHIFT":
+                val = int(parts[1])
+                self.regs.write32(REG_HIST_SHIFT, val & 0xF)
+                return f"OK hist_shift={val}"
+
             elif parts[0] == "GET_CONFIG":
                 threshold = self.regs.read_signed16(REG_THRESHOLD)
                 deadtime = self.regs.read32(REG_DEADTIME) & 0xFFFF
                 gate = self.regs.read32(REG_GATE_PERIOD)
                 ctrl = self.regs.read32(REG_CTRL)
+                hist_shift = self.regs.read32(REG_HIST_SHIFT) & 0xF
                 return (f"enabled={ctrl & 1} threshold={threshold} "
-                        f"deadtime={deadtime} gate_period={gate}")
+                        f"deadtime={deadtime} gate_period={gate} "
+                        f"hist_shift={hist_shift}")
 
             elif parts[0] == "STREAM":
                 if len(parts) > 1:
