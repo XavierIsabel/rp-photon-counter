@@ -1,0 +1,10 @@
+RedPitaya-FPGA/
+client/.venv/
+client/.git/
+client/uv.lock
+client/main.py
+client/README.md
+client/.gitignore
+client/.python-version
+__pycache__/
+*.pyc
